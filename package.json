@@ -1,0 +1,21 @@
+{
+  "name": "apple-local-llm",
+  "version": "0.0.1",
+  "description": "Call Apple's on-device Foundation Models using the OpenAI Responses API format — no servers, no setup.",
+  "main": "index.js",
+  "keywords": [
+    "apple",
+    "llm",
+    "foundation-models",
+    "openai",
+    "local",
+    "on-device",
+    "macos"
+  ],
+  "author": "parkerduff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parkerduff/apple-local-llm"
+  }
+}
