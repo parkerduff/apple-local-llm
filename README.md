@@ -124,12 +124,15 @@ const result = await client.responses.create({
 });
 ```
 
-Returns:
+Returns `ResponseResult` on success, or an error object:
 ```typescript
+// Success:
 { ok: true, text: "...", request_id: "..." }
-// or
+// Error:
 { ok: false, error: { code: "...", detail: "..." } }
 ```
+
+Note: The return type is a discriminated union, not the exported `ResponseResult` interface.
 
 **Error codes:**
 | Code | Description |
@@ -163,7 +166,7 @@ Cancel an in-progress request.
 
 ```typescript
 const result = await client.responses.cancel("req_123");
-// { ok: true } or { ok: false, error: { code: "NOT_FOUND", detail: "..." } }
+// { ok: true } or { ok: false, error: { code: "NOT_RUNNING", detail: "..." } }
 ```
 
 ### `client.shutdown()`
@@ -176,61 +179,17 @@ await client.shutdown();
 
 ## TypeScript Types
 
-All types are exported for TypeScript users:
+All types are exported:
 
 ```typescript
 import type {
-  // Client
   ClientOptions,
   ReasonCode,
-  
-  // Compatibility & Capabilities
   CompatibilityResult,
   CapabilitiesResult,
-  
-  // Responses API
   ResponsesCreateParams,
   ResponseResult,
-  StreamEvent,
 } from "apple-local-llm";
-```
-
-### Type Definitions
-
-```typescript
-interface ClientOptions {
-  model?: string;
-  onLog?: (message: string) => void;
-  idleTimeoutMs?: number;
-}
-
-interface CompatibilityResult {
-  compatible: boolean;
-  reasonCode?: ReasonCode;
-}
-
-interface CapabilitiesResult {
-  available: boolean;
-  reasonCode?: string;
-  model?: string;
-}
-
-interface ResponsesCreateParams {
-  input: string;
-  model?: string;
-  max_output_tokens?: number;
-  stream?: boolean;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}
-
-interface StreamEvent {
-  request_id: string;
-  event: "delta" | "done" | "error";
-  delta?: string;
-  text?: string;
-  error?: { code: string; detail: string };
-}
 ```
 
 ## CLI Usage
@@ -285,41 +244,6 @@ curl -X POST http://localhost:8080/generate \
   -d '{"prompt": "What is 2+2?"}'
 # Response: {"text":"2+2 equals 4."}
 ```
-
-## All Interaction Methods
-
-This package supports **three ways** to interact with Apple's on-device models:
-
-### 1. npm Package (Recommended)
-```bash
-npm install apple-local-llm
-```
-- `createClient()` — Create client instance
-- `client.compatibility.check()` — Check if model is available
-- `client.capabilities.get()` — Get model capabilities
-- `client.responses.create()` — Generate response (non-streaming)
-- `client.responses.create({stream: true})` — Generate with streaming flag
-- `client.responses.cancel(id)` — Cancel in-progress request
-- `client.stream()` — Async generator streaming
-- `client.shutdown()` — Graceful shutdown
-
-### 2. CLI Binary (`fm-proxy`)
-```bash
-fm-proxy "prompt"              # Simple prompt
-fm-proxy -s "prompt"           # Streaming (-s or --stream)
-fm-proxy --serve               # Start HTTP server
-fm-proxy --serve --port=3000   # Custom port
-fm-proxy --stdio               # LSP stdio mode (used by npm package)
-fm-proxy -h                    # Help (-h or --help)
-fm-proxy -v                    # Version (-v or --version)
-```
-
-### 3. HTTP Server
-```bash
-fm-proxy --serve --port=8080
-```
-- `GET /health` — Health check
-- `POST /generate` — Text generation `{"prompt": "..."}`
 
 ## How It Works
 

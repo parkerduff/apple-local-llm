@@ -1,4 +1,4 @@
-export { createClient, AppleLocalLLMClient } from "./client";
+export { createClient, AppleLocalLLMClient } from "./client.js";
 export type {
   ClientOptions,
   CompatibilityResult,
@@ -7,4 +7,4 @@ export type {
   ResponseResult,
   StreamEvent,
   ReasonCode,
-} from "./client";
+} from "./client.js";

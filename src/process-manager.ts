@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
-import { RPCTransport } from "./transport";
-import { HelperLocation, ensureExecutable } from "./resolver";
+import { RPCTransport } from "./transport.js";
+import { HelperLocation, ensureExecutable } from "./resolver.js";
 
 export interface ProcessManagerOptions {
   idleTimeoutMs?: number;

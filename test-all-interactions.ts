@@ -3,10 +3,12 @@
  * Run with: npx tsx test-all-interactions.ts
  */
 
-import { createClient, AppleLocalLLMClient } from "./src/client";
+import { createClient, AppleLocalLLMClient } from "./src/client.js";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BINARY_PATH = path.join(__dirname, "swift", ".build", "release", "fm-proxy");
 const TEST_PROMPT = "What color is the sky on a clear day?";
 

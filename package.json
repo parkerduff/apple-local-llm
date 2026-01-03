@@ -2,6 +2,7 @@
   "name": "apple-local-llm",
   "version": "0.0.1",
   "description": "Call Apple's on-device Foundation Models — no servers, no setup.",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

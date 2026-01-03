@@ -1,6 +1,6 @@
-import { resolveHelper, ResolverResult } from "./resolver";
-import { ProcessManager } from "./process-manager";
-import { RPCResponse } from "./transport";
+import { resolveHelper, ResolverResult } from "./resolver.js";
+import { ProcessManager } from "./process-manager.js";
+import { RPCResponse } from "./transport.js";
 
 export type ReasonCode =
   | "NOT_DARWIN"
