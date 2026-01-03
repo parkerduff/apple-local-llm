@@ -1,21 +1,52 @@
 {
   "name": "apple-local-llm",
   "version": "0.0.1",
-  "description": "Call Apple's on-device Foundation Models using the OpenAI Responses API format — no servers, no setup.",
-  "main": "index.js",
+  "description": "Call Apple's on-device Foundation Models — no servers, no setup.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:swift": "cd swift && swift build -c release",
+    "build:all": "npm run build:swift && npm run copy:bin && npm run build",
+    "copy:bin": "mkdir -p bin && cp swift/.build/release/fm-proxy bin/fm-proxy",
+    "test": "npx tsx test-all-interactions.ts",
+    "prepublishOnly": "npm run build:all"
+  },
   "keywords": [
     "apple",
     "llm",
     "foundation-models",
-    "openai",
     "local",
     "on-device",
-    "macos"
+    "macos",
+    "apple-intelligence"
   ],
   "author": "parkerduff",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/parkerduff/apple-local-llm"
+  },
+  "bin": {
+    "fm-proxy": "./bin/fm-proxy"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

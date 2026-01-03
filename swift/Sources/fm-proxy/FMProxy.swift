@@ -1,0 +1,123 @@
+import Foundation
+import FoundationModels
+
+@main
+struct FMProxy {
+    static func main() async {
+        let args = CommandLine.arguments.dropFirst()
+        
+        // Check for help
+        if args.contains("--help") || args.contains("-h") {
+            printUsage()
+            return
+        }
+        
+        // Check for version
+        if args.contains("--version") || args.contains("-v") {
+            print("fm-proxy 0.0.1")
+            return
+        }
+        
+        // Check for stdio mode (for npm package)
+        if args.contains("--stdio") {
+            let transport = StdioTransport()
+            let handler = RPCHandler()
+            await transport.run(handler: handler)
+            return
+        }
+        
+        // Check for serve mode (HTTP server)
+        if args.contains("--serve") {
+            let portArg = args.first { $0.hasPrefix("--port=") }
+            let port: UInt16 = portArg.flatMap { UInt16($0.dropFirst(7)) } ?? 8080
+            let server = HTTPServer(port: port)
+            await server.start()
+            return
+        }
+        
+        // No args = show usage
+        if args.isEmpty {
+            printUsage()
+            return
+        }
+        
+        // Simple CLI mode: treat remaining args as prompt
+        let prompt = args.filter { !$0.hasPrefix("-") }.joined(separator: " ")
+        if prompt.isEmpty {
+            printUsage()
+            return
+        }
+        
+        // Check streaming flag
+        let streaming = args.contains("--stream") || args.contains("-s")
+        
+        await runSimpleCLI(prompt: prompt, streaming: streaming)
+    }
+    
+    static func printUsage() {
+        let usage = """
+        fm-proxy - Apple on-device LLM CLI
+        
+        USAGE:
+            fm-proxy <prompt>              Simple prompt
+            fm-proxy --serve               Start HTTP server
+            fm-proxy --stdio               LSP mode (for npm package)
+        
+        OPTIONS:
+            -s, --stream       Stream output token by token
+            --serve            Start HTTP server (default port 8080)
+            --port=<PORT>      Set server port (use with --serve)
+            --stdio            Run in LSP stdio mode (for programmatic use)
+            -h, --help         Print help
+            -v, --version      Print version
+        
+        EXAMPLES:
+            fm-proxy "What is the capital of France?"
+            fm-proxy --stream "Tell me a story"
+            fm-proxy --serve
+            fm-proxy --serve --port=3000
+            curl -X POST http://localhost:8080/generate -H "Content-Type: application/json" -d '{"prompt":"Hello"}'
+        """
+        print(usage)
+    }
+    
+    static func runSimpleCLI(prompt: String, streaming: Bool) async {
+        // Check availability
+        let availability = SystemLanguageModel.default.availability
+        guard case .available = availability else {
+            switch availability {
+            case .unavailable(let reason):
+                fputs("Error: Model unavailable - \(reason)\n", stderr)
+            case .available:
+                break // Already handled by guard
+            @unknown default:
+                fputs("Error: Model not available\n", stderr)
+            }
+            exit(1)
+        }
+        
+        do {
+            let session = LanguageModelSession()
+            
+            if streaming {
+                var previousContent = ""
+                for try await partial in session.streamResponse(to: prompt) {
+                    let newContent = partial.content
+                    if newContent.count > previousContent.count && newContent.hasPrefix(previousContent) {
+                        let delta = String(newContent.dropFirst(previousContent.count))
+                        print(delta, terminator: "")
+                        fflush(stdout)
+                    }
+                    previousContent = newContent
+                }
+                print() // Final newline
+            } else {
+                let response = try await session.respond(to: prompt)
+                print(response.content)
+            }
+        } catch {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+    }
+}

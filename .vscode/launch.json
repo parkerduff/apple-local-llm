@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:apple-local-llm}/swift",
+            "name": "Debug fm-proxy (swift)",
+            "program": "${workspaceFolder:apple-local-llm}/swift/.build/debug/fm-proxy",
+            "preLaunchTask": "swift: Build Debug fm-proxy (swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:apple-local-llm}/swift",
+            "name": "Release fm-proxy (swift)",
+            "program": "${workspaceFolder:apple-local-llm}/swift/.build/release/fm-proxy",
+            "preLaunchTask": "swift: Build Release fm-proxy (swift)"
+        }
+    ]
+}

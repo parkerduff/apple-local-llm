@@ -1,0 +1,33 @@
+# Node
+node_modules/
+
+# Binary (copied before publish, not committed)
+bin/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Swift
+swift/.build/
+swift/.swiftpm/
+swift/Package.resolved
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# Test scripts
+swift/test-*.sh
+swift/test-*.swift
+
+# Build artifacts
+dist/
+build/
+*.tgz
+
+# Lock files (optional, keep if you want)
+package-lock.json
