@@ -23,6 +23,24 @@ export interface CapabilitiesResult {
   model?: string;
 }
 
+export interface JSONSchema {
+  type: "object" | "array" | "string" | "number" | "integer" | "boolean";
+  properties?: Record<string, JSONSchema>;
+  items?: JSONSchema;
+  required?: string[];
+  description?: string;
+  enum?: string[];
+}
+
+export interface ResponseFormat {
+  type: "json_schema";
+  json_schema: {
+    name: string;
+    description?: string;
+    schema: JSONSchema;
+  };
+}
+
 export interface ResponsesCreateParams {
   model?: string;
   input: string;
@@ -30,6 +48,7 @@ export interface ResponsesCreateParams {
   stream?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
+  response_format?: ResponseFormat;
 }
 
 export interface ResponseResult {
@@ -202,6 +221,7 @@ export class AppleLocalLLMClient {
           input: params.input,
           max_output_tokens: params.max_output_tokens,
           stream: true,
+          response_format: params.response_format,
         },
         (event) => {
           const result = event.result as StreamEvent | undefined;
@@ -228,7 +248,12 @@ export class AppleLocalLLMClient {
     } else {
       const response = await transport.send(
         "responses.create",
-        { model: this.getModel(params.model), input: params.input, max_output_tokens: params.max_output_tokens },
+        { 
+          model: this.getModel(params.model), 
+          input: params.input, 
+          max_output_tokens: params.max_output_tokens,
+          response_format: params.response_format,
+        },
         { signal: params.signal, timeoutMs: params.timeoutMs }
       );
 

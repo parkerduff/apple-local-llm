@@ -96,6 +96,14 @@ actor RPCHandler {
         let requestId = request.id ?? "req_\(requestCounter)"
         let shouldStream = params.stream ?? false
         
+        // Build schema if response_format is provided
+        var dynamicSchema: DynamicGenerationSchema? = nil
+        if let responseFormat = params.responseFormat,
+           responseFormat.type == "json_schema",
+           let jsonSchema = responseFormat.jsonSchema {
+            dynamicSchema = buildDynamicSchema(from: jsonSchema.schema, name: jsonSchema.name, description: jsonSchema.description)
+        }
+        
         // Store placeholder before creating task to avoid race condition
         activeRequests[requestId] = .some(nil)
         
@@ -107,7 +115,19 @@ actor RPCHandler {
                 let prompt = params.input
                 
                 if shouldStream {
-                    // Streaming response
+                    // Streaming response (structured output not supported for streaming)
+                    if dynamicSchema != nil {
+                        let errorEvent = StreamEvent(
+                            requestId: requestId,
+                            event: "error",
+                            delta: nil,
+                            text: nil,
+                            error: RPCError(code: "INVALID_PARAMS", detail: "response_format is not supported with streaming")
+                        )
+                        transport.send(.success(id: request.id, result: .streamEvent(errorEvent)))
+                        return
+                    }
+                    
                     var fullText = ""
                     let stream = session.streamResponse(to: prompt)
                     
@@ -156,8 +176,15 @@ actor RPCHandler {
                         error: nil
                     )
                     transport.send(.success(id: request.id, result: .streamEvent(doneEvent)))
+                } else if let schema = dynamicSchema {
+                    // Non-streaming with structured output
+                    let generationSchema = try GenerationSchema(root: schema, dependencies: [])
+                    let response = try await session.respond(to: prompt, schema: generationSchema)
+                    let jsonText = self.generatedContentToJSON(response.content)
+                    let result = ResponseResult(requestId: requestId, text: jsonText)
+                    transport.send(.success(id: request.id, result: .response(result)))
                 } else {
-                    // Non-streaming response
+                    // Non-streaming plain text response
                     let response = try await session.respond(to: prompt)
                     let result = ResponseResult(requestId: requestId, text: response.content)
                     transport.send(.success(id: request.id, result: .response(result)))
@@ -195,6 +222,108 @@ actor RPCHandler {
         
         // Update with actual task (placeholder was set above)
         activeRequests[requestId] = task
+    }
+    
+    // MARK: - Schema Helpers
+    
+    nonisolated private func buildDynamicSchema(from node: JSONSchemaNode, name: String, description: String?) -> DynamicGenerationSchema {
+        switch node {
+        case .object(let properties, _, let desc):
+            let schemaProperties = properties.map { (key, value) in
+                DynamicGenerationSchema.Property(
+                    name: key,
+                    description: getDescription(from: value),
+                    schema: buildDynamicSchema(from: value, name: key, description: nil)
+                )
+            }
+            return DynamicGenerationSchema(name: name, description: description ?? desc, properties: schemaProperties)
+            
+        case .array(let items, _):
+            // Use native array type for simple item types
+            switch items {
+            case .string(_, _):
+                return DynamicGenerationSchema(type: [String].self)
+            case .integer(_):
+                return DynamicGenerationSchema(type: [Int].self)
+            case .number(_):
+                return DynamicGenerationSchema(type: [Double].self)
+            case .boolean(_):
+                return DynamicGenerationSchema(type: [Bool].self)
+            default:
+                // For complex items (objects/arrays), fall back to array of strings
+                return DynamicGenerationSchema(type: [String].self)
+            }
+            
+        case .string(let desc, let enumValues):
+            if let enumVals = enumValues, !enumVals.isEmpty {
+                return DynamicGenerationSchema(name: name, description: description ?? desc, anyOf: enumVals)
+            }
+            return DynamicGenerationSchema(type: String.self)
+            
+        case .number(_):
+            return DynamicGenerationSchema(type: Double.self)
+            
+        case .integer(_):
+            return DynamicGenerationSchema(type: Int.self)
+            
+        case .boolean(_):
+            return DynamicGenerationSchema(type: Bool.self)
+        }
+    }
+    
+    nonisolated private func getDescription(from node: JSONSchemaNode) -> String? {
+        switch node {
+        case .object(_, _, let desc): return desc
+        case .array(_, let desc): return desc
+        case .string(let desc, _): return desc
+        case .number(let desc): return desc
+        case .integer(let desc): return desc
+        case .boolean(let desc): return desc
+        }
+    }
+    
+    nonisolated private func generatedContentToJSON(_ content: GeneratedContent) -> String {
+        let jsonValue = contentToJSONValue(content)
+        if let data = try? JSONSerialization.data(withJSONObject: jsonValue, options: [.sortedKeys]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
+    }
+    
+    nonisolated private func contentToJSONValue(_ content: GeneratedContent) -> Any {
+        switch content.kind {
+        case .structure(let properties, _):
+            var dict: [String: Any] = [:]
+            for (key, value) in properties {
+                dict[key] = contentToJSONValue(value)
+            }
+            return dict
+        case .string(let value):
+            return value
+        default:
+            // Try array extraction first
+            if let arrayVal = try? content.value([String].self) {
+                return arrayVal
+            } else if let arrayVal = try? content.value([Int].self) {
+                return arrayVal
+            } else if let arrayVal = try? content.value([Double].self) {
+                return arrayVal
+            } else if let arrayVal = try? content.value([Bool].self) {
+                return arrayVal
+            }
+            // Handle primitive types
+            if let intVal = try? content.value(Int.self) {
+                return intVal
+            } else if let doubleVal = try? content.value(Double.self) {
+                return doubleVal
+            } else if let boolVal = try? content.value(Bool.self) {
+                return boolVal
+            } else if let stringVal = try? content.value(String.self) {
+                return stringVal
+            }
+            return NSNull()
+        }
     }
     
     private func removeActiveRequest(_ id: String) {

@@ -121,8 +121,38 @@ const result = await client.responses.create({
   stream: false,            // Optional
   signal: abortController.signal, // Optional: AbortSignal
   timeoutMs: 60000,         // Optional: request timeout (ms)
+  response_format: {        // Optional: structured JSON output
+    type: "json_schema",
+    json_schema: {
+      name: "Result",
+      schema: { type: "object", properties: { ... } }
+    }
+  }
 });
 ```
+
+**Structured Output Example:**
+
+```typescript
+const result = await client.responses.create({
+  input: "List 3 colors",
+  response_format: {
+    type: "json_schema",
+    json_schema: {
+      name: "Colors",
+      schema: {
+        type: "object",
+        properties: {
+          colors: { type: "array", items: { type: "string" } }
+        }
+      }
+    }
+  }
+});
+const data = JSON.parse(result.text); // { colors: ["red", "blue", "green"] }
+```
+
+> `response_format` is not supported with streaming.
 
 Returns `ResponseResult` on success, or an error object:
 ```typescript
@@ -189,6 +219,8 @@ import type {
   CapabilitiesResult,
   ResponsesCreateParams,
   ResponseResult,
+  JSONSchema,
+  ResponseFormat,
 } from "apple-local-llm";
 ```
 

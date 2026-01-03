@@ -7,4 +7,6 @@ export type {
   ResponseResult,
   StreamEvent,
   ReasonCode,
+  JSONSchema,
+  ResponseFormat,
 } from "./client.js";
