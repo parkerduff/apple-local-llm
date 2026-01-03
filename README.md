@@ -243,7 +243,7 @@ fm-proxy --serve --port=3000
 # Other options
 fm-proxy --help      # Show usage (or -h)
 fm-proxy --version   # Show version (or -v)
-fm-proxy --stdio     # LSP mode (used internally by npm package)
+fm-proxy --stdio     # stdio mode (used internally by npm package)
 ```
 
 ### HTTP Server Mode
@@ -259,7 +259,16 @@ fm-proxy --serve --port=8080
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check and availability status |
-| `/generate` | POST | Text generation |
+| `/generate` | POST | Text generation (supports streaming) |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--port=<PORT>` | Set server port (default: 8080) |
+| `--auth-token=<TOKEN>` | Require Bearer token for `/generate` |
+
+You can also set `AUTH_TOKEN` environment variable instead of `--auth-token`.
 
 **CORS:** All endpoints support CORS with `Access-Control-Allow-Origin: *`.
 
@@ -267,14 +276,38 @@ fm-proxy --serve --port=8080
 
 ```bash
 # Health check
-curl http://localhost:8080/health
+curl http://127.0.0.1:8080/health
 # Response: {"status":"ok","model":"apple-on-device","available":true}
 
 # Simple generation
-curl -X POST http://localhost:8080/generate \
+curl -X POST http://127.0.0.1:8080/generate \
   -H "Content-Type: application/json" \
   -d '{"prompt": "What is 2+2?"}'
 # Response: {"text":"2+2 equals 4."}
+
+# With authentication
+curl -X POST http://127.0.0.1:8080/generate \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"prompt": "Hello"}'
+```
+
+#### Streaming (SSE)
+
+Add `"stream": true` to get Server-Sent Events with OpenAI-compatible chunks:
+
+```bash
+curl -N -X POST http://127.0.0.1:8080/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Write a haiku", "stream": true}'
+```
+
+Response:
+```
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}]}
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
+data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
 ```
 
 ## How It Works

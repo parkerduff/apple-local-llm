@@ -1,13 +1,15 @@
 import Foundation
 import FoundationModels
 
-final class HTTPServer: Sendable {
+final class HTTPServer: @unchecked Sendable {
     let port: UInt16
+    let authToken: String?
     private let acceptQueue = DispatchQueue(label: "fm-proxy.http.accept", qos: .userInitiated)
     private let clientQueue = DispatchQueue(label: "fm-proxy.http.client", qos: .userInitiated, attributes: .concurrent)
     
-    init(port: UInt16 = 8080) {
+    init(port: UInt16 = 8080, authToken: String? = nil) {
         self.port = port
+        self.authToken = authToken
     }
     
     func start() async {
@@ -23,7 +25,7 @@ final class HTTPServer: Sendable {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")  // Loopback only
         
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -41,10 +43,13 @@ final class HTTPServer: Sendable {
             exit(1)
         }
         
-        print("Server running at http://localhost:\(port)")
+        print("Server running at http://127.0.0.1:\(port)")
         print("Endpoints:")
         print("  GET  /health     - Health check")
         print("  POST /generate   - Text generation")
+        if authToken != nil {
+            print("Authentication: Required (Bearer token)")
+        }
         print("")
         
         // Run blocking accept loop on dedicated thread
@@ -84,24 +89,50 @@ final class HTTPServer: Sendable {
         defer { close(socket) }
         
         // Read HTTP request on dedicated queue to avoid blocking async executor
-        guard let (method, path, body) = await withCheckedContinuation({ (continuation: CheckedContinuation<(String, String, String)?, Never>) in
+        guard let (method, path, body, authHeader) = await withCheckedContinuation({ (continuation: CheckedContinuation<(String, String, String, String?)?, Never>) in
             clientQueue.async {
                 continuation.resume(returning: self.readHTTPRequest(socket: socket))
             }
         }) else { return }
-        
         
         // Route request
         let response: String
         // Strip query string from path for routing
         let routePath = path.split(separator: "?").first.map(String.init) ?? path
         
+        // Handle OPTIONS preflight without auth
+        if method == "OPTIONS" {
+            let response = handleCORS()
+            writeToSocket(socket, string: response)
+            return
+        }
+        
         if method == "GET" && routePath == "/health" {
             response = handleHealth()
         } else if method == "POST" && routePath == "/generate" {
+            // Check auth only for /generate
+            if let requiredToken = authToken {
+                let trimmed = authHeader?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let providedToken: String?
+                if let trimmed, trimmed.lowercased().hasPrefix("bearer ") {
+                    providedToken = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    providedToken = nil
+                }
+                guard let providedToken, !providedToken.isEmpty, providedToken == requiredToken else {
+                    let response = makeResponse(status: "401 Unauthorized", body: #"{"error":"Unauthorized"}"#)
+                    writeToSocket(socket, string: response)
+                    return
+                }
+            }
+            // Check if streaming requested
+            if let data = body.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let stream = json["stream"] as? Bool, stream {
+                await handleGenerateStream(socket: socket, body: body)
+                return // Already wrote response
+            }
             response = await handleGenerate(body: body)
-        } else if method == "OPTIONS" {
-            response = handleCORS()
         } else {
             response = makeResponse(status: "404 Not Found", body: #"{"error":"Not found"}"#)
         }
@@ -150,11 +181,80 @@ final class HTTPServer: Sendable {
         }
     }
     
+    private func handleGenerateStream(socket: Int32, body: String) async {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let prompt = json["prompt"] as? String else {
+            let errorResponse = makeResponse(status: "400 Bad Request", body: #"{"error":"Missing prompt field"}"#)
+            writeToSocket(socket, string: errorResponse)
+            return
+        }
+        
+        // Write SSE headers
+        let headers = "HTTP/1.1 200 OK\r\n" +
+                      "Content-Type: text/event-stream; charset=utf-8\r\n" +
+                      "Cache-Control: no-cache\r\n" +
+                      "Connection: keep-alive\r\n" +
+                      "X-Accel-Buffering: no\r\n" +
+                      "Access-Control-Allow-Origin: *\r\n" +
+                      "Access-Control-Allow-Headers: Content-Type\(authToken != nil ? ", Authorization" : "")\r\n\r\n"
+        guard writeToSocket(socket, string: headers) else { return }
+        
+        do {
+            let session = LanguageModelSession()
+            var previousContent = ""
+            let requestId = UUID().uuidString
+            let created = Int(Date().timeIntervalSince1970)
+            
+            // Initial chunk with role
+            let roleChunk = #"data: {"id":"\#(requestId)","object":"chat.completion.chunk","created":\#(created),"model":"apple-on-device","choices":[{"index":0,"delta":{"role":"assistant"}}]}"# + "\n\n"
+            guard writeToSocket(socket, string: roleChunk) else { return }
+            
+            for try await partial in session.streamResponse(to: prompt) {
+                let newContent = partial.content
+                // Only emit delta if content grew by appending (standard OpenAI behavior)
+                if newContent.count > previousContent.count && newContent.hasPrefix(previousContent) {
+                    let delta = String(newContent.dropFirst(previousContent.count))
+                    let escaped = escapeJSON(delta)
+                    let event = #"data: {"id":"\#(requestId)","object":"chat.completion.chunk","created":\#(created),"model":"apple-on-device","choices":[{"index":0,"delta":{"content":"\#(escaped)"}}]}"# + "\n\n"
+                    guard writeToSocket(socket, string: event) else { return }
+                }
+                previousContent = newContent
+            }
+            
+            // Final chunk with finish_reason
+            let finishChunk = #"data: {"id":"\#(requestId)","object":"chat.completion.chunk","created":\#(created),"model":"apple-on-device","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"# + "\n\n"
+            _ = writeToSocket(socket, string: finishChunk)
+            _ = writeToSocket(socket, string: "data: [DONE]\n\n")
+        } catch {
+            let msg = escapeJSON(error.localizedDescription)
+            let errorEvent = #"data: {"error":{"message":"\#(msg)","type":"server_error"}}"# + "\n\n"
+            _ = writeToSocket(socket, string: errorEvent)
+        }
+    }
+    
+    @discardableResult
+    private func writeToSocket(_ socket: Int32, string: String) -> Bool {
+        let data = Data(string.utf8)
+        return data.withUnsafeBytes { ptr -> Bool in
+            var remaining = data.count
+            var offset = 0
+            while remaining > 0 {
+                let written = write(socket, ptr.baseAddress! + offset, remaining)
+                if written <= 0 { return false }
+                offset += written
+                remaining -= written
+            }
+            return true
+        }
+    }
+    
     private func handleCORS() -> String {
         return "HTTP/1.1 204 No Content\r\n" +
                "Access-Control-Allow-Origin: *\r\n" +
                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-               "Access-Control-Allow-Headers: Content-Type\r\n" +
+               "Access-Control-Allow-Headers: Content-Type\(authToken != nil ? ", Authorization" : "")\r\n" +
+               "Access-Control-Max-Age: 600\r\n" +
                "Content-Length: 0\r\n\r\n"
     }
     
@@ -162,11 +262,12 @@ final class HTTPServer: Sendable {
         return "HTTP/1.1 \(status)\r\n" +
                "Content-Type: application/json\r\n" +
                "Access-Control-Allow-Origin: *\r\n" +
+               "Access-Control-Allow-Headers: Content-Type\(authToken != nil ? ", Authorization" : "")\r\n" +
                "Content-Length: \(body.utf8.count)\r\n\r\n" +
                body
     }
     
-    private func readHTTPRequest(socket: Int32) -> (method: String, path: String, body: String)? {
+    private func readHTTPRequest(socket: Int32) -> (method: String, path: String, body: String, authorization: String?)? {
         var headerData = Data()
         var buffer = [UInt8](repeating: 0, count: 1)
         
@@ -194,13 +295,16 @@ final class HTTPServer: Sendable {
         let method = String(parts[0])
         let path = String(parts[1])
         
-        // Parse Content-Length
+        // Parse headers
         var contentLength = 0
+        var authorization: String? = nil
         for line in lines {
-            if line.lowercased().hasPrefix("content-length:") {
+            let lower = line.lowercased()
+            if lower.hasPrefix("content-length:") {
                 let value = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
                 contentLength = Int(value) ?? 0
-                break
+            } else if lower.hasPrefix("authorization:") {
+                authorization = String(line.dropFirst("authorization:".count)).trimmingCharacters(in: .whitespaces)
             }
         }
         
@@ -217,7 +321,7 @@ final class HTTPServer: Sendable {
             body = String(bytes: bodyBuffer[0..<totalRead], encoding: .utf8) ?? ""
         }
         
-        return (method, path, body)
+        return (method, path, body, authorization)
     }
     
     private func escapeJSON(_ str: String) -> String {

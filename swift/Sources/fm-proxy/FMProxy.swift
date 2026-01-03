@@ -30,7 +30,13 @@ struct FMProxy {
         if args.contains("--serve") {
             let portArg = args.first { $0.hasPrefix("--port=") }
             let port: UInt16 = portArg.flatMap { UInt16($0.dropFirst(7)) } ?? 8080
-            let server = HTTPServer(port: port)
+            
+            // Auth token from args or env
+            let tokenArg = args.first { $0.hasPrefix("--auth-token=") }
+            let authToken: String? = tokenArg.map { String($0.dropFirst(13)) } 
+                ?? ProcessInfo.processInfo.environment["AUTH_TOKEN"]
+            
+            let server = HTTPServer(port: port, authToken: authToken)
             await server.start()
             return
         }
@@ -61,22 +67,27 @@ struct FMProxy {
         USAGE:
             fm-proxy <prompt>              Simple prompt
             fm-proxy --serve               Start HTTP server
-            fm-proxy --stdio               LSP mode (for npm package)
+            fm-proxy --stdio               stdio mode (for npm package)
         
         OPTIONS:
             -s, --stream       Stream output token by token
             --serve            Start HTTP server (default port 8080)
             --port=<PORT>      Set server port (use with --serve)
-            --stdio            Run in LSP stdio mode (for programmatic use)
+            --auth-token=<T>   Require Bearer token for HTTP requests
+            --stdio            Run in stdio mode (for programmatic use)
             -h, --help         Print help
             -v, --version      Print version
+        
+        ENVIRONMENT:
+            AUTH_TOKEN         Same as --auth-token
         
         EXAMPLES:
             fm-proxy "What is the capital of France?"
             fm-proxy --stream "Tell me a story"
             fm-proxy --serve
             fm-proxy --serve --port=3000
-            curl -X POST http://localhost:8080/generate -H "Content-Type: application/json" -d '{"prompt":"Hello"}'
+            curl -X POST http://127.0.0.1:8080/generate -H "Content-Type: application/json" -d '{"prompt":"Hello"}'
+            curl -X POST http://127.0.0.1:8080/generate -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"prompt":"Hello"}'
         """
         print(usage)
     }
