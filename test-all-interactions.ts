@@ -163,7 +163,29 @@ async function main() {
       if (!result.ok) throw new Error(`Request failed: ${(result as any).error?.detail}`);
     });
 
-    // Test 8: AbortSignal support
+    // Test 8: client.responses.create() with response_format (structured output)
+    await test("client.responses.create({response_format}) - structured JSON output", async () => {
+      const result = await client.responses.create({
+        input: "List 3 colors",
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "Colors",
+            schema: {
+              type: "object",
+              properties: {
+                colors: { type: "array", items: { type: "string" } }
+              }
+            }
+          }
+        }
+      });
+      if (!result.ok) throw new Error(`Request failed: ${(result as any).error?.detail}`);
+      const parsed = JSON.parse(result.text);
+      if (!parsed.colors || !Array.isArray(parsed.colors)) throw new Error("Invalid structured output");
+    });
+
+    // Test 10: AbortSignal support
     await test("client.responses.create({signal}) - AbortSignal support", async () => {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 10);
@@ -178,13 +200,13 @@ async function main() {
       }
     });
 
-    // Test 9: model parameter
+    // Test 11: model parameter
     await test("client.responses.create({model}) - accepts model parameter", async () => {
       const result = await client.responses.create({ input: "Say yes", model: "default" });
       if (!result.ok) throw new Error(`Request failed: ${(result as any).error?.detail}`);
     });
 
-    // Test 10: responses.cancel() - cancel non-existent request (should return error)
+    // Test 12: responses.cancel() - cancel non-existent request (should return error)
     await test("client.responses.cancel() - handles non-existent request", async () => {
       const result = await client.responses.cancel("non-existent-id");
       // Should return ok: false since request doesn't exist
@@ -192,7 +214,7 @@ async function main() {
     });
   }
 
-  // Test 11: client.shutdown()
+  // Test 13: client.shutdown()
   await test("client.shutdown() - graceful shutdown", async () => {
     await client.shutdown();
   });
@@ -247,6 +269,13 @@ async function main() {
       if (result.exitCode !== 0) throw new Error(`Exit code: ${result.exitCode}`);
       if (!result.stdout) throw new Error("No output");
     });
+
+    // Test CLI: --max-tokens
+    await test("fm-proxy --max-tokens=N - limits output tokens", async () => {
+      const result = await runCLI(["--max-tokens=20", "Count from 1 to 100"]);
+      if (result.exitCode !== 0) throw new Error(`Exit code: ${result.exitCode}, stderr: ${result.stderr}`);
+      if (!result.stdout) throw new Error("No output");
+    });
   }
 
   // ================================================
@@ -283,11 +312,60 @@ async function main() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           },
-          JSON.stringify({ prompt: TEST_PROMPT })
+          JSON.stringify({ input: TEST_PROMPT })
         );
         if (res.status !== 200) throw new Error(`Status: ${res.status}, Body: ${res.body}`);
         const json = JSON.parse(res.body);
         if (!json.text) throw new Error("No text in response");
+      });
+
+      // Test POST /generate with max_output_tokens
+      await test("POST /generate - with max_output_tokens", async () => {
+        const res = await httpRequest(
+          {
+            hostname: "localhost",
+            port,
+            path: "/generate",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          },
+          JSON.stringify({ input: "Count from 1 to 100", max_output_tokens: 20 })
+        );
+        if (res.status !== 200) throw new Error(`Status: ${res.status}, Body: ${res.body}`);
+        const json = JSON.parse(res.body);
+        if (!json.text) throw new Error("No text in response");
+      });
+
+      // Test POST /generate with response_format (structured output)
+      await test("POST /generate - with response_format (structured output)", async () => {
+        const res = await httpRequest(
+          {
+            hostname: "localhost",
+            port,
+            path: "/generate",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          },
+          JSON.stringify({
+            input: "List 3 colors",
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "Colors",
+                schema: {
+                  type: "object",
+                  properties: {
+                    colors: { type: "array", items: { type: "string" } }
+                  }
+                }
+              }
+            }
+          })
+        );
+        if (res.status !== 200) throw new Error(`Status: ${res.status}, Body: ${res.body}`);
+        const json = JSON.parse(res.body);
+        const parsed = JSON.parse(json.text);
+        if (!parsed.colors || !Array.isArray(parsed.colors)) throw new Error("Invalid structured output");
       });
     }
 

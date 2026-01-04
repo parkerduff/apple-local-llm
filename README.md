@@ -117,7 +117,7 @@ Generate a response.
 const result = await client.responses.create({
   input: "Your prompt here",
   model: "default",         // Optional: model identifier
-  max_output_tokens: 1000,  // Optional
+  max_output_tokens: 500,   // Optional: limit response tokens
   stream: false,            // Optional
   signal: abortController.signal, // Optional: AbortSignal
   timeoutMs: 60000,         // Optional: request timeout (ms)
@@ -236,6 +236,9 @@ fm-proxy "What is the capital of France?"
 fm-proxy --stream "Tell me a story"
 fm-proxy -s "Tell me a story"
 
+# Limit output tokens
+fm-proxy --max-tokens=50 "Count to 100"
+
 # Start HTTP server
 fm-proxy --serve
 fm-proxy --serve --port=3000
@@ -282,14 +285,24 @@ curl http://127.0.0.1:8080/health
 # Simple generation
 curl -X POST http://127.0.0.1:8080/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "What is 2+2?"}'
+  -d '{"input": "What is 2+2?"}'
 # Response: {"text":"2+2 equals 4."}
+
+# With max_output_tokens
+curl -X POST http://127.0.0.1:8080/generate \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Count to 100", "max_output_tokens": 50}'
+
+# With structured output (response_format)
+curl -X POST http://127.0.0.1:8080/generate \
+  -H "Content-Type: application/json" \
+  -d '{"input": "List 3 colors", "response_format": {"type": "json_schema", "json_schema": {"name": "Colors", "schema": {"type": "object", "properties": {"colors": {"type": "array", "items": {"type": "string"}}}}}}}'
 
 # With authentication
 curl -X POST http://127.0.0.1:8080/generate \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
-  -d '{"prompt": "Hello"}'
+  -d '{"input": "Hello"}'
 ```
 
 #### Streaming (SSE)
@@ -299,7 +312,7 @@ Add `"stream": true` to get Server-Sent Events with OpenAI-compatible chunks:
 ```bash
 curl -N -X POST http://127.0.0.1:8080/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Write a haiku", "stream": true}'
+  -d '{"input": "Write a haiku", "stream": true}'
 ```
 
 Response:

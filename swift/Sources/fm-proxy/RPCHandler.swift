@@ -114,6 +114,12 @@ actor RPCHandler {
                 let session = LanguageModelSession()
                 let prompt = params.input
                 
+                // Build generation options if max_output_tokens is specified
+                var options: GenerationOptions? = nil
+                if let maxTokens = params.maxOutputTokens {
+                    options = GenerationOptions(maximumResponseTokens: maxTokens)
+                }
+                
                 if shouldStream {
                     // Streaming response (structured output not supported for streaming)
                     if dynamicSchema != nil {
@@ -129,7 +135,9 @@ actor RPCHandler {
                     }
                     
                     var fullText = ""
-                    let stream = session.streamResponse(to: prompt)
+                    let stream = options != nil 
+                        ? session.streamResponse(to: prompt, options: options!)
+                        : session.streamResponse(to: prompt)
                     
                     for try await partial in stream {
                         // Check for cancellation
@@ -179,13 +187,17 @@ actor RPCHandler {
                 } else if let schema = dynamicSchema {
                     // Non-streaming with structured output
                     let generationSchema = try GenerationSchema(root: schema, dependencies: [])
-                    let response = try await session.respond(to: prompt, schema: generationSchema)
+                    let response = options != nil
+                        ? try await session.respond(to: prompt, schema: generationSchema, options: options!)
+                        : try await session.respond(to: prompt, schema: generationSchema)
                     let jsonText = self.generatedContentToJSON(response.content)
                     let result = ResponseResult(requestId: requestId, text: jsonText)
                     transport.send(.success(id: request.id, result: .response(result)))
                 } else {
                     // Non-streaming plain text response
-                    let response = try await session.respond(to: prompt)
+                    let response = options != nil
+                        ? try await session.respond(to: prompt, options: options!)
+                        : try await session.respond(to: prompt)
                     let result = ResponseResult(requestId: requestId, text: response.content)
                     transport.send(.success(id: request.id, result: .response(result)))
                 }

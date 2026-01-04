@@ -221,7 +221,6 @@ export class AppleLocalLLMClient {
           input: params.input,
           max_output_tokens: params.max_output_tokens,
           stream: true,
-          response_format: params.response_format,
         },
         (event) => {
           const result = event.result as StreamEvent | undefined;
@@ -250,7 +249,7 @@ export class AppleLocalLLMClient {
         "responses.create",
         { 
           model: this.getModel(params.model), 
-          input: params.input, 
+          input: params.input,
           max_output_tokens: params.max_output_tokens,
           response_format: params.response_format,
         },
@@ -274,8 +273,8 @@ export class AppleLocalLLMClient {
   }
 
   async *stream(
-    params: Omit<ResponsesCreateParams, "stream">
-  ): AsyncGenerator<{ delta: string } | { done: true; text: string }, void, unknown> {
+    params: Omit<ResponsesCreateParams, "stream" | "response_format">
+  ): AsyncGenerator<{ delta: string; request_id: string } | { done: true; text: string; request_id: string }, void, unknown> {
     const compat = await this.checkCompatibility();
     if (!compat.compatible) {
       throw new Error(`Not compatible: ${compat.reasonCode}`);
@@ -327,9 +326,9 @@ export class AppleLocalLLMClient {
 
       const result = (event as RPCResponse).result as StreamEvent;
       if (result.event === "delta" && result.delta) {
-        yield { delta: result.delta };
+        yield { delta: result.delta, request_id: result.request_id };
       } else if (result.event === "done") {
-        yield { done: true, text: result.text ?? "" };
+        yield { done: true, text: result.text ?? "", request_id: result.request_id };
         break;
       } else if (result.event === "error") {
         throw new Error(result.error?.detail ?? "Stream error");

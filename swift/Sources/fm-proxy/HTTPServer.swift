@@ -95,18 +95,17 @@ final class HTTPServer: @unchecked Sendable {
             }
         }) else { return }
         
-        // Route request
-        let response: String
         // Strip query string from path for routing
         let routePath = path.split(separator: "?").first.map(String.init) ?? path
         
         // Handle OPTIONS preflight without auth
         if method == "OPTIONS" {
-            let response = handleCORS()
-            writeToSocket(socket, string: response)
+            writeToSocket(socket, string: handleCORS())
             return
         }
         
+        // Route request
+        let response: String
         if method == "GET" && routePath == "/health" {
             response = handleHealth()
         } else if method == "POST" && routePath == "/generate" {
@@ -166,15 +165,46 @@ final class HTTPServer: @unchecked Sendable {
     private func handleGenerate(body: String) async -> String {
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let prompt = json["prompt"] as? String else {
-            return makeResponse(status: "400 Bad Request", body: #"{"error":"Missing prompt field"}"#)
+              let input = json["input"] as? String else {
+            return makeResponse(status: "400 Bad Request", body: #"{"error":"Missing input field"}"#)
+        }
+        
+        // Parse max_output_tokens if provided
+        var options: GenerationOptions? = nil
+        if let maxTokens = json["max_output_tokens"] as? Int {
+            options = GenerationOptions(maximumResponseTokens: maxTokens)
+        }
+        
+        // Parse response_format if provided
+        var dynamicSchema: DynamicGenerationSchema? = nil
+        if let responseFormat = json["response_format"] as? [String: Any],
+           let formatType = responseFormat["type"] as? String,
+           formatType == "json_schema",
+           let jsonSchema = responseFormat["json_schema"] as? [String: Any],
+           let schemaName = jsonSchema["name"] as? String,
+           let schema = jsonSchema["schema"] as? [String: Any] {
+            let schemaDesc = jsonSchema["description"] as? String
+            if let node = parseJSONSchemaNode(schema) {
+                dynamicSchema = buildDynamicSchema(from: node, name: schemaName, description: schemaDesc)
+            }
         }
         
         do {
             let session = LanguageModelSession()
-            let response = try await session.respond(to: prompt)
-            let escaped = escapeJSON(response.content)
-            return makeResponse(status: "200 OK", body: #"{"text":"\#(escaped)"}"#)
+            if let schema = dynamicSchema {
+                let generationSchema = try GenerationSchema(root: schema, dependencies: [])
+                let response = options != nil
+                    ? try await session.respond(to: input, schema: generationSchema, options: options!)
+                    : try await session.respond(to: input, schema: generationSchema)
+                let jsonText = generatedContentToJSON(response.content)
+                return makeResponse(status: "200 OK", body: #"{"text":\#(jsonText)}"#)
+            } else {
+                let response = options != nil
+                    ? try await session.respond(to: input, options: options!)
+                    : try await session.respond(to: input)
+                let escaped = escapeJSON(response.content)
+                return makeResponse(status: "200 OK", body: #"{"text":"\#(escaped)"}"#)
+            }
         } catch {
             let msg = escapeJSON(error.localizedDescription)
             return makeResponse(status: "500 Internal Server Error", body: #"{"error":"\#(msg)"}"#)
@@ -184,10 +214,16 @@ final class HTTPServer: @unchecked Sendable {
     private func handleGenerateStream(socket: Int32, body: String) async {
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let prompt = json["prompt"] as? String else {
-            let errorResponse = makeResponse(status: "400 Bad Request", body: #"{"error":"Missing prompt field"}"#)
+              let input = json["input"] as? String else {
+            let errorResponse = makeResponse(status: "400 Bad Request", body: #"{"error":"Missing input field"}"#)
             writeToSocket(socket, string: errorResponse)
             return
+        }
+        
+        // Parse max_output_tokens if provided
+        var options: GenerationOptions? = nil
+        if let maxTokens = json["max_output_tokens"] as? Int {
+            options = GenerationOptions(maximumResponseTokens: maxTokens)
         }
         
         // Write SSE headers
@@ -210,7 +246,10 @@ final class HTTPServer: @unchecked Sendable {
             let roleChunk = #"data: {"id":"\#(requestId)","object":"chat.completion.chunk","created":\#(created),"model":"apple-on-device","choices":[{"index":0,"delta":{"role":"assistant"}}]}"# + "\n\n"
             guard writeToSocket(socket, string: roleChunk) else { return }
             
-            for try await partial in session.streamResponse(to: prompt) {
+            let stream = options != nil
+                ? session.streamResponse(to: input, options: options!)
+                : session.streamResponse(to: input)
+            for try await partial in stream {
                 let newContent = partial.content
                 // Only emit delta if content grew by appending (standard OpenAI behavior)
                 if newContent.count > previousContent.count && newContent.hasPrefix(previousContent) {
@@ -350,5 +389,117 @@ final class HTTPServer: @unchecked Sendable {
             }
         }
         return result
+    }
+    
+    // MARK: - Schema Helpers
+    
+    private func parseJSONSchemaNode(_ dict: [String: Any]) -> JSONSchemaNode? {
+        guard let type = dict["type"] as? String else { return nil }
+        let description = dict["description"] as? String
+        
+        switch type {
+        case "object":
+            let props = dict["properties"] as? [String: [String: Any]] ?? [:]
+            var parsedProps: [String: JSONSchemaNode] = [:]
+            for (key, value) in props {
+                if let node = parseJSONSchemaNode(value) {
+                    parsedProps[key] = node
+                }
+            }
+            let required = dict["required"] as? [String]
+            return .object(properties: parsedProps, required: required, description: description)
+        case "array":
+            if let items = dict["items"] as? [String: Any], let itemNode = parseJSONSchemaNode(items) {
+                return .array(items: itemNode, description: description)
+            }
+            return .array(items: .string(description: nil, enumValues: nil), description: description)
+        case "string":
+            let enumVals = dict["enum"] as? [String]
+            return .string(description: description, enumValues: enumVals)
+        case "number":
+            return .number(description: description)
+        case "integer":
+            return .integer(description: description)
+        case "boolean":
+            return .boolean(description: description)
+        default:
+            return .string(description: description, enumValues: nil)
+        }
+    }
+    
+    private func buildDynamicSchema(from node: JSONSchemaNode, name: String, description: String?) -> DynamicGenerationSchema {
+        switch node {
+        case .object(let properties, _, let desc):
+            let schemaProperties = properties.map { (key, value) in
+                DynamicGenerationSchema.Property(
+                    name: key,
+                    description: getDescription(from: value),
+                    schema: buildDynamicSchema(from: value, name: key, description: nil)
+                )
+            }
+            return DynamicGenerationSchema(name: name, description: description ?? desc, properties: schemaProperties)
+        case .array(let items, _):
+            switch items {
+            case .string(_, _): return DynamicGenerationSchema(type: [String].self)
+            case .integer(_): return DynamicGenerationSchema(type: [Int].self)
+            case .number(_): return DynamicGenerationSchema(type: [Double].self)
+            case .boolean(_): return DynamicGenerationSchema(type: [Bool].self)
+            default: return DynamicGenerationSchema(type: [String].self)
+            }
+        case .string(let desc, let enumValues):
+            if let enumVals = enumValues, !enumVals.isEmpty {
+                return DynamicGenerationSchema(name: name, description: description ?? desc, anyOf: enumVals)
+            }
+            return DynamicGenerationSchema(type: String.self)
+        case .number(_):
+            return DynamicGenerationSchema(type: Double.self)
+        case .integer(_):
+            return DynamicGenerationSchema(type: Int.self)
+        case .boolean(_):
+            return DynamicGenerationSchema(type: Bool.self)
+        }
+    }
+    
+    private func getDescription(from node: JSONSchemaNode) -> String? {
+        switch node {
+        case .object(_, _, let desc): return desc
+        case .array(_, let desc): return desc
+        case .string(let desc, _): return desc
+        case .number(let desc): return desc
+        case .integer(let desc): return desc
+        case .boolean(let desc): return desc
+        }
+    }
+    
+    private func generatedContentToJSON(_ content: GeneratedContent) -> String {
+        let jsonValue = contentToJSONValue(content)
+        if let data = try? JSONSerialization.data(withJSONObject: jsonValue, options: [.sortedKeys]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
+    }
+    
+    private func contentToJSONValue(_ content: GeneratedContent) -> Any {
+        switch content.kind {
+        case .structure(let properties, _):
+            var dict: [String: Any] = [:]
+            for (key, value) in properties {
+                dict[key] = contentToJSONValue(value)
+            }
+            return dict
+        case .string(let value):
+            return value
+        default:
+            if let arrayVal = try? content.value([String].self) { return arrayVal }
+            else if let arrayVal = try? content.value([Int].self) { return arrayVal }
+            else if let arrayVal = try? content.value([Double].self) { return arrayVal }
+            else if let arrayVal = try? content.value([Bool].self) { return arrayVal }
+            if let intVal = try? content.value(Int.self) { return intVal }
+            else if let doubleVal = try? content.value(Double.self) { return doubleVal }
+            else if let boolVal = try? content.value(Bool.self) { return boolVal }
+            else if let stringVal = try? content.value(String.self) { return stringVal }
+            return NSNull()
+        }
     }
 }
